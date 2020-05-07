@@ -320,8 +320,6 @@ impl PyDictRef {
         PyDictRef::merge(&self.entries, dict_obj, kwargs, vm)
     }
 
-<<<<<<< HEAD
-=======
     #[pymethod(name = "__ior__")]
     fn ior(self, other: PyObjectRef, vm: &VirtualMachine) -> PyResult {
         let dicted: Result<PyDictRef, _> = other.clone().downcast();
@@ -354,7 +352,6 @@ impl PyDictRef {
         Err(vm.new_type_error("__or__ not implemented for non-dict type".to_owned()))
     }
 
->>>>>>> 41849ab5... fixed: returned wrong error when union opration is invoked with other type. So far it was a key error now it is a type error.
     #[pymethod]
     fn pop(
         self,
