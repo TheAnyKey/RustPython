@@ -104,6 +104,17 @@ impl PyDictRef {
         Ok(())
     }
 
+    fn merge_dict(
+        dict: &DictContentType,
+        dict_other: PyDictRef,
+        vm: &VirtualMachine,
+    ) -> PyResult<()> {
+        for (key, value) in dict_other {
+            dict.insert(vm, &key, value)?;
+        }
+        Ok(())
+    }
+
     #[pyclassmethod]
     fn fromkeys(
         class: PyClassRef,
