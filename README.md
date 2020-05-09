@@ -31,6 +31,7 @@ To test RustPython, do the following:
 
     $ git clone https://github.com/RustPython/RustPython
     $ cd RustPython
+    $ export RUSTPYTHONPATH=Lib
     $ cargo run demo.py
     Hello, RustPython!
 
@@ -151,20 +152,20 @@ methods are often the simplest and easiest way to contribute.
 You can also simply run `./whats_left.sh` to assist in finding any unimplemented
 method.
 
-## Using a different standard library
+## Using a standard library
 
-As of now the standard library is under construction. You can change a standard
+As of now the standard library is under construction. You can use a standard
 library by setting the RUSTPYTHONPATH environment variable.
 
 To do this, follow this method:
 
 ```shell
-$ export RUSTPYTHONPATH=./Lib  # this is same as the default value
+$ export RUSTPYTHONPATH=~/GIT/RustPython/Lib
 $ cargo run -- -c 'import xdrlib'
 ```
 
 You can play around with other standard libraries for python. For example, the
-[ouroboros library](https://github.com/pybee/ouroboros) or CPython Lib.
+[ouroboros library](https://github.com/pybee/ouroboros).
 
 ## Compiling to WebAssembly
 

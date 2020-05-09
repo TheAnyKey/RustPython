@@ -1,11 +1,10 @@
 use super::objtype::{self, PyClassRef};
 use crate::exceptions::{self, PyBaseExceptionRef};
 use crate::frame::{ExecutionResult, FrameRef};
-use crate::pyobject::{PyObjectRef, PyResult, ThreadSafe};
+use crate::pyobject::{PyObjectRef, PyResult};
 use crate::vm::VirtualMachine;
 
-use crossbeam_utils::atomic::AtomicCell;
-use std::sync::RwLock;
+use std::cell::{Cell, RefCell};
 
 #[derive(Debug, PartialEq, Clone, Copy)]
 pub enum Variant {
@@ -35,30 +34,28 @@ impl Variant {
 #[derive(Debug)]
 pub struct Coro {
     frame: FrameRef,
-    pub closed: AtomicCell<bool>,
-    running: AtomicCell<bool>,
-    exceptions: RwLock<Vec<PyBaseExceptionRef>>,
-    started: AtomicCell<bool>,
+    pub closed: Cell<bool>,
+    running: Cell<bool>,
+    exceptions: RefCell<Vec<PyBaseExceptionRef>>,
+    started: Cell<bool>,
     variant: Variant,
 }
-
-impl ThreadSafe for Coro {}
 
 impl Coro {
     pub fn new(frame: FrameRef, variant: Variant) -> Self {
         Coro {
             frame,
-            closed: AtomicCell::new(false),
-            running: AtomicCell::new(false),
-            exceptions: RwLock::new(vec![]),
-            started: AtomicCell::new(false),
+            closed: Cell::new(false),
+            running: Cell::new(false),
+            exceptions: RefCell::new(vec![]),
+            started: Cell::new(false),
             variant,
         }
     }
 
     fn maybe_close(&self, res: &PyResult<ExecutionResult>) {
         match res {
-            Ok(ExecutionResult::Return(_)) | Err(_) => self.closed.store(true),
+            Ok(ExecutionResult::Return(_)) | Err(_) => self.closed.set(true),
             Ok(ExecutionResult::Yield(_)) => {}
         }
     }
@@ -67,29 +64,27 @@ impl Coro {
     where
         F: FnOnce(FrameRef) -> PyResult<ExecutionResult>,
     {
-        self.running.store(true);
+        self.running.set(true);
         let curr_exception_stack_len = vm.exceptions.borrow().len();
         vm.exceptions
             .borrow_mut()
-            .append(&mut self.exceptions.write().unwrap());
+            .append(&mut self.exceptions.borrow_mut());
         let result = vm.with_frame(self.frame.clone(), func);
-        std::mem::swap(
-            &mut *self.exceptions.write().unwrap(),
-            &mut vm
-                .exceptions
+        self.exceptions.replace(
+            vm.exceptions
                 .borrow_mut()
                 .split_off(curr_exception_stack_len),
         );
-        self.running.store(false);
-        self.started.store(true);
+        self.running.set(false);
+        self.started.set(true);
         result
     }
 
     pub fn send(&self, value: PyObjectRef, vm: &VirtualMachine) -> PyResult {
-        if self.closed.load() {
+        if self.closed.get() {
             return Err(vm.new_exception_empty(self.variant.stop_iteration(vm)));
         }
-        if !self.started.load() && !vm.is_none(&value) {
+        if !self.started.get() && !vm.is_none(&value) {
             return Err(vm.new_type_error(format!(
                 "can't send non-None value to a just-started {}",
                 self.variant.name()
@@ -125,7 +120,7 @@ impl Coro {
         exc_tb: PyObjectRef,
         vm: &VirtualMachine,
     ) -> PyResult {
-        if self.closed.load() {
+        if self.closed.get() {
             return Err(exceptions::normalize(exc_type, exc_val, exc_tb, vm)?);
         }
         let result = self.run_with_context(vm, |f| f.gen_throw(vm, exc_type, exc_val, exc_tb));
@@ -134,7 +129,7 @@ impl Coro {
     }
 
     pub fn close(&self, vm: &VirtualMachine) -> PyResult<()> {
-        if self.closed.load() {
+        if self.closed.get() {
             return Ok(());
         }
         let result = self.run_with_context(vm, |f| {
@@ -145,7 +140,7 @@ impl Coro {
                 vm.get_none(),
             )
         });
-        self.closed.store(true);
+        self.closed.set(true);
         match result {
             Ok(ExecutionResult::Yield(_)) => {
                 Err(vm.new_runtime_error(format!("{} ignored GeneratorExit", self.variant.name())))
@@ -156,13 +151,13 @@ impl Coro {
     }
 
     pub fn started(&self) -> bool {
-        self.started.load()
+        self.started.get()
     }
     pub fn running(&self) -> bool {
-        self.running.load()
+        self.running.get()
     }
     pub fn closed(&self) -> bool {
-        self.closed.load()
+        self.closed.get()
     }
     pub fn frame(&self) -> FrameRef {
         self.frame.clone()
