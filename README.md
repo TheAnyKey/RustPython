@@ -16,6 +16,11 @@ A Python-3 (CPython >= 3.5.0) Interpreter written in Rust :snake: :scream:
 [![WAPM package](https://wapm.io/package/rustpython/badge.svg?style=flat)](https://wapm.io/package/rustpython)
 [![Open in Gitpod](https://img.shields.io/static/v1?label=Open%20in&message=Gitpod&color=1aa6e4&logo=gitpod)](https://gitpod.io#https://github.com/RustPython/RustPython)
 
+[![Open in Gitpod](https://img.shields.io/static/v1?label=Open%20in&message=Gitpod&color=1aa6e4&logo=gitpod)](https://gitpod.io#https://github.com/TheAnyKey/RustPython)
+
+For this Fork
+[![Open in Gitpod](https://img.shields.io/static/v1?label=Open%20in&message=Gitpod&color=1aa6e4&logo=gitpod)](https://gitpod.io#https://github.com/TheAnyKey/RustPython)
+
 ## Usage
 
 #### Check out our [online demo](https://rustpython.github.io/demo/) running on WebAssembly.
