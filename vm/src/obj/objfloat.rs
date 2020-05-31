@@ -12,7 +12,7 @@ use crate::function::{OptionalArg, OptionalOption};
 use crate::pyhash;
 use crate::pyobject::{
     IntoPyObject, PyArithmaticValue::*, PyClassImpl, PyComparisonValue, PyContext, PyObjectRef,
-    PyRef, PyResult, PyValue, ThreadSafe, TryFromObject, TypeProtocol,
+    PyRef, PyResult, PyValue, TryFromObject, TypeProtocol,
 };
 use crate::vm::VirtualMachine;
 
@@ -22,8 +22,6 @@ use crate::vm::VirtualMachine;
 pub struct PyFloat {
     value: f64,
 }
-
-impl ThreadSafe for PyFloat {}
 
 impl PyFloat {
     pub fn to_f64(self) -> f64 {
@@ -612,7 +610,7 @@ fn str_to_float(vm: &VirtualMachine, literal: &str) -> PyResult<f64> {
 
         if !c.is_ascii_alphanumeric() {
             if let Some(l) = last_tok {
-                if !l.is_ascii_alphanumeric() {
+                if !l.is_ascii_alphanumeric() && !(c == '.' && (l == '-' || l == '+')) {
                     return Err(invalid_convert(vm, literal));
                 }
             }

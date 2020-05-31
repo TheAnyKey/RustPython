@@ -25,7 +25,7 @@ For this Fork
 
 #### Check out our [online demo](https://rustpython.github.io/demo/) running on WebAssembly.
 
-RustPython requires Rust latest stable version (e.g 1.38.0 at Oct 1st 2019). 
+RustPython requires Rust latest stable version (e.g 1.43.0 at May 24th 2020). 
 To check Rust version: `rustc --version` If you wish to update,
 `rustup update stable`.
 

@@ -6,13 +6,14 @@ use crate::obj::objtype::PyClassRef;
 use crate::obj::{objbool, objiter};
 use crate::pyobject::{
     Either, IntoPyObject, PyClassImpl, PyIterable, PyObjectRef, PyRef, PyResult, PyValue,
-    ThreadSafe, TryFromObject,
+    TryFromObject,
 };
 use crate::VirtualMachine;
 
-use std::cell::Cell;
 use std::fmt;
 use std::sync::{RwLock, RwLockReadGuard, RwLockWriteGuard};
+
+use crossbeam_utils::atomic::AtomicCell;
 
 struct ArrayTypeSpecifierError {
     _priv: (),
@@ -227,8 +228,6 @@ pub struct PyArray {
     array: RwLock<ArrayContentType>,
 }
 
-impl ThreadSafe for PyArray {}
-
 pub type PyArrayRef = PyRef<PyArray>;
 
 impl PyValue for PyArray {
@@ -421,7 +420,7 @@ impl PyArray {
     #[pymethod(name = "__iter__")]
     fn iter(zelf: PyRef<Self>) -> PyArrayIter {
         PyArrayIter {
-            position: Cell::new(0),
+            position: AtomicCell::new(0),
             array: zelf,
         }
     }
@@ -430,7 +429,7 @@ impl PyArray {
 #[pyclass]
 #[derive(Debug)]
 pub struct PyArrayIter {
-    position: Cell<usize>,
+    position: AtomicCell<usize>,
     array: PyArrayRef,
 }
 
@@ -444,14 +443,9 @@ impl PyValue for PyArrayIter {
 impl PyArrayIter {
     #[pymethod(name = "__next__")]
     fn next(&self, vm: &VirtualMachine) -> PyResult {
-        if self.position.get() < self.array.borrow_value().len() {
-            let ret = self
-                .array
-                .borrow_value()
-                .getitem_by_idx(self.position.get(), vm)
-                .unwrap()?;
-            self.position.set(self.position.get() + 1);
-            Ok(ret)
+        let pos = self.position.fetch_add(1);
+        if let Some(item) = self.array.borrow_value().getitem_by_idx(pos, vm) {
+            Ok(item?)
         } else {
             Err(objiter::new_stop_iteration(vm))
         }

@@ -1,9 +1,10 @@
-use std::cell::{Cell, Ref, RefCell};
 use std::io::{self, prelude::*};
 use std::net::{Ipv4Addr, Shutdown, SocketAddr, ToSocketAddrs};
+use std::sync::{RwLock, RwLockReadGuard, RwLockWriteGuard};
 use std::time::Duration;
 
 use byteorder::{BigEndian, ByteOrder};
+use crossbeam_utils::atomic::AtomicCell;
 use gethostname::gethostname;
 #[cfg(all(unix, not(target_os = "redox")))]
 use nix::unistd::sethostname;
@@ -44,10 +45,10 @@ mod c {
 #[pyclass]
 #[derive(Debug)]
 pub struct PySocket {
-    kind: Cell<i32>,
-    family: Cell<i32>,
-    proto: Cell<i32>,
-    sock: RefCell<Socket>,
+    kind: AtomicCell<i32>,
+    family: AtomicCell<i32>,
+    proto: AtomicCell<i32>,
+    sock: RwLock<Socket>,
 }
 
 impl PyValue for PySocket {
@@ -60,17 +61,21 @@ pub type PySocketRef = PyRef<PySocket>;
 
 #[pyimpl(flags(BASETYPE))]
 impl PySocket {
-    fn sock(&self) -> Ref<Socket> {
-        self.sock.borrow()
+    fn sock(&self) -> RwLockReadGuard<'_, Socket> {
+        self.sock.read().unwrap()
+    }
+
+    fn sock_mut(&self) -> RwLockWriteGuard<'_, Socket> {
+        self.sock.write().unwrap()
     }
 
     #[pyslot]
     fn tp_new(cls: PyClassRef, _args: PyFuncArgs, vm: &VirtualMachine) -> PyResult<PyRef<Self>> {
         PySocket {
-            kind: Cell::default(),
-            family: Cell::default(),
-            proto: Cell::default(),
-            sock: RefCell::new(invalid_sock()),
+            kind: AtomicCell::default(),
+            family: AtomicCell::default(),
+            proto: AtomicCell::default(),
+            sock: RwLock::new(invalid_sock()),
         }
         .into_ref_with_type(vm, cls)
     }
@@ -103,12 +108,12 @@ impl PySocket {
             )
             .map_err(|err| convert_sock_error(vm, err))?;
 
-            self.family.set(family);
-            self.kind.set(socket_kind);
-            self.proto.set(proto);
+            self.family.store(family);
+            self.kind.store(socket_kind);
+            self.proto.store(proto);
             sock
         };
-        self.sock.replace(sock);
+        *self.sock.write().unwrap() = sock;
         Ok(())
     }
 
@@ -191,7 +196,7 @@ impl PySocket {
     #[pymethod]
     fn sendall(&self, bytes: PyBytesLike, vm: &VirtualMachine) -> PyResult<()> {
         bytes
-            .with_ref(|b| self.sock.borrow_mut().write_all(b))
+            .with_ref(|b| self.sock_mut().write_all(b))
             .map_err(|err| convert_sock_error(vm, err))
     }
 
@@ -206,11 +211,11 @@ impl PySocket {
 
     #[pymethod]
     fn close(&self) {
-        self.sock.replace(invalid_sock());
+        *self.sock_mut() = invalid_sock();
     }
     #[pymethod]
     fn detach(&self) -> RawSocket {
-        into_sock_fileno(self.sock.replace(invalid_sock()))
+        into_sock_fileno(std::mem::replace(&mut *self.sock_mut(), invalid_sock()))
     }
 
     #[pymethod]
@@ -384,29 +389,29 @@ impl PySocket {
 
     #[pyproperty(name = "type")]
     fn kind(&self) -> i32 {
-        self.kind.get()
+        self.kind.load()
     }
     #[pyproperty]
     fn family(&self) -> i32 {
-        self.family.get()
+        self.family.load()
     }
     #[pyproperty]
     fn proto(&self) -> i32 {
-        self.proto.get()
+        self.proto.load()
     }
 }
 
 impl io::Read for PySocketRef {
     fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
-        <Socket as io::Read>::read(&mut self.sock.borrow_mut(), buf)
+        <Socket as io::Read>::read(&mut self.sock_mut(), buf)
     }
 }
 impl io::Write for PySocketRef {
     fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
-        <Socket as io::Write>::write(&mut self.sock.borrow_mut(), buf)
+        <Socket as io::Write>::write(&mut self.sock_mut(), buf)
     }
     fn flush(&mut self) -> io::Result<()> {
-        <Socket as io::Write>::flush(&mut self.sock.borrow_mut())
+        <Socket as io::Write>::flush(&mut self.sock_mut())
     }
 }
 

@@ -21,7 +21,7 @@ use crate::function::{OptionalArg, OptionalOption};
 use crate::obj::objstr::do_cformat_string;
 use crate::pyobject::{
     Either, PyClassImpl, PyComparisonValue, PyContext, PyIterable, PyObjectRef, PyRef, PyResult,
-    PyValue, ThreadSafe, TryFromObject, TypeProtocol,
+    PyValue, TryFromObject, TypeProtocol,
 };
 use crate::vm::VirtualMachine;
 
@@ -41,8 +41,6 @@ use crate::vm::VirtualMachine;
 pub struct PyByteArray {
     inner: RwLock<PyByteInner>,
 }
-
-impl ThreadSafe for PyByteArray {}
 
 pub type PyByteArrayRef = PyRef<PyByteArray>;
 
@@ -387,6 +385,30 @@ impl PyByteArray {
     #[pymethod(name = "rstrip")]
     fn rstrip(&self, chars: OptionalOption<PyByteInner>) -> PyByteArray {
         self.borrow_value().rstrip(chars).into()
+    }
+
+    /// removeprefix($self, prefix, /)
+    ///
+    ///
+    /// Return a bytearray object with the given prefix string removed if present.
+    ///
+    /// If the bytearray starts with the prefix string, return string[len(prefix):]
+    /// Otherwise, return a copy of the original bytearray.
+    #[pymethod(name = "removeprefix")]
+    fn removeprefix(&self, prefix: PyByteInner) -> PyByteArray {
+        self.borrow_value().removeprefix(prefix).into()
+    }
+
+    /// removesuffix(self, prefix, /)
+    ///
+    ///
+    /// Return a bytearray object with the given suffix string removed if present.
+    ///
+    /// If the bytearray ends with the suffix string, return string[:len(suffix)]
+    /// Otherwise, return a copy of the original bytearray.
+    #[pymethod(name = "removesuffix")]
+    fn removesuffix(&self, suffix: PyByteInner) -> PyByteArray {
+        self.borrow_value().removesuffix(suffix).to_vec().into()
     }
 
     #[pymethod(name = "split")]

@@ -10,8 +10,8 @@ use super::objsequence;
 use super::objtype::{self, PyClassRef};
 use crate::exceptions::PyBaseExceptionRef;
 use crate::pyobject::{
-    PyCallable, PyClassImpl, PyContext, PyObjectRef, PyRef, PyResult, PyValue, ThreadSafe,
-    TryFromObject, TypeProtocol,
+    PyCallable, PyClassImpl, PyContext, PyObjectRef, PyRef, PyResult, PyValue, TryFromObject,
+    TypeProtocol,
 };
 use crate::vm::VirtualMachine;
 
@@ -26,7 +26,7 @@ pub fn get_iter(vm: &VirtualMachine, iter_target: &PyObjectRef) -> PyResult {
         vm.invoke(&method, vec![])
     } else {
         vm.get_method_or_type_error(iter_target.clone(), "__getitem__", || {
-            format!("Cannot iterate over {}", iter_target.class().name)
+            format!("'{}' object is not iterable", iter_target.class().name)
         })?;
         Ok(PySequenceIterator::new_forward(iter_target.clone())
             .into_ref(vm)
@@ -145,7 +145,6 @@ pub struct PySequenceIterator {
     pub obj: PyObjectRef,
     pub reversed: bool,
 }
-impl ThreadSafe for PySequenceIterator {}
 
 impl PyValue for PySequenceIterator {
     fn class(vm: &VirtualMachine) -> PyClassRef {
@@ -219,7 +218,6 @@ pub struct PyCallableIterator {
     sentinel: PyObjectRef,
     done: AtomicCell<bool>,
 }
-impl ThreadSafe for PyCallableIterator {}
 
 impl PyValue for PyCallableIterator {
     fn class(vm: &VirtualMachine) -> PyClassRef {

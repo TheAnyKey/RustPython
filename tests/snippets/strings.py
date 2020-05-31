@@ -475,7 +475,7 @@ assert '{:E}'.format(float('inf')) == 'INF'
 
 # remove*fix test
 def test_removeprefix():
-    s='foobarfoo'
+    s = 'foobarfoo'
     s_ref='foobarfoo'
     assert s.removeprefix('f') == s_ref[1:]
     assert s.removeprefix('fo') == s_ref[2:]
@@ -488,8 +488,23 @@ def test_removeprefix():
     assert s.removeprefix('-foo') == s_ref
     assert s.removeprefix('afoo') == s_ref
     assert s.removeprefix('*foo') == s_ref
-    
+
     assert s==s_ref, 'undefined test fail'
+
+    s_uc = '😱foobarfoo🖖'
+    s_ref_uc = '😱foobarfoo🖖'
+    assert s_uc.removeprefix('😱') == s_ref_uc[1:]
+    assert s_uc.removeprefix('😱fo') == s_ref_uc[3:]
+    assert s_uc.removeprefix('😱foo') == s_ref_uc[4:]
+    
+    assert s_uc.removeprefix('🖖') == s_ref_uc
+    assert s_uc.removeprefix('foo') == s_ref_uc
+    assert s_uc.removeprefix(' ') == s_ref_uc
+    assert s_uc.removeprefix('_😱') == s_ref_uc
+    assert s_uc.removeprefix(' 😱') == s_ref_uc
+    assert s_uc.removeprefix('-😱') == s_ref_uc
+    assert s_uc.removeprefix('#😱') == s_ref_uc
+
 
 def test_removeprefix_types():
     s='0123456'
@@ -501,7 +516,7 @@ def test_removeprefix_types():
             s.removeprefix(o)
         except:
             found=True
-        
+
         assert found, f'Removeprefix accepts other type: {type(o)}: {o=}'
 
 def test_removesuffix():
@@ -518,8 +533,22 @@ def test_removesuffix():
     assert s.removesuffix('foo-') == s_ref
     assert s.removesuffix('foo*') == s_ref
     assert s.removesuffix('fooa') == s_ref
-    
     assert s==s_ref, 'undefined test fail'
+
+    s_uc = '😱foobarfoo🖖'
+    s_ref_uc = '😱foobarfoo🖖'
+    assert s_uc.removesuffix('🖖') == s_ref_uc[:-1]
+    assert s_uc.removesuffix('oo🖖') == s_ref_uc[:-3]
+    assert s_uc.removesuffix('foo🖖') == s_ref_uc[:-4]
+    
+    assert s_uc.removesuffix('😱') == s_ref_uc
+    assert s_uc.removesuffix('foo') == s_ref_uc
+    assert s_uc.removesuffix(' ') == s_ref_uc
+    assert s_uc.removesuffix('🖖_') == s_ref_uc
+    assert s_uc.removesuffix('🖖 ') == s_ref_uc
+    assert s_uc.removesuffix('🖖-') == s_ref_uc
+    assert s_uc.removesuffix('🖖#') == s_ref_uc
+
 
 def test_removesuffix_types():
     s='0123456'
@@ -531,13 +560,10 @@ def test_removesuffix_types():
             s.removesuffix(o)
         except:
             found=True
-        
         assert found, f'Removesuffix accepts other type: {type(o)}: {o=}'
-
 
 skip_if_unsupported(3,9,test_removeprefix)
 skip_if_unsupported(3,9,test_removeprefix_types)
 skip_if_unsupported(3,9,test_removesuffix)
 skip_if_unsupported(3,9,test_removesuffix_types)
-
 

@@ -1,4 +1,3 @@
-use std::cell::{Cell, RefCell};
 use std::ffi;
 use std::fs::File;
 use std::fs::OpenOptions;
@@ -7,10 +6,12 @@ use std::io::{self, ErrorKind, Read, Write};
 use std::os::unix::fs::OpenOptionsExt;
 #[cfg(windows)]
 use std::os::windows::fs::OpenOptionsExt;
+use std::sync::RwLock;
 use std::time::{Duration, SystemTime};
 use std::{env, fs};
 
 use bitflags::bitflags;
+use crossbeam_utils::atomic::AtomicCell;
 #[cfg(unix)]
 use nix::errno::Errno;
 #[cfg(all(unix, not(target_os = "redox")))]
@@ -393,7 +394,7 @@ fn getgroups() -> nix::Result<Vec<Gid>> {
     })
 }
 
-#[cfg(any(target_os = "linux", target_os = "android"))]
+#[cfg(any(target_os = "linux", target_os = "android", target_os = "openbsd"))]
 use nix::unistd::getgroups;
 
 #[cfg(target_os = "redox")]
@@ -683,8 +684,8 @@ impl DirEntryRef {
 #[pyclass]
 #[derive(Debug)]
 struct ScandirIterator {
-    entries: RefCell<fs::ReadDir>,
-    exhausted: Cell<bool>,
+    entries: RwLock<fs::ReadDir>,
+    exhausted: AtomicCell<bool>,
     mode: OutputMode,
 }
 
@@ -698,11 +699,11 @@ impl PyValue for ScandirIterator {
 impl ScandirIterator {
     #[pymethod(name = "__next__")]
     fn next(&self, vm: &VirtualMachine) -> PyResult {
-        if self.exhausted.get() {
+        if self.exhausted.load() {
             return Err(objiter::new_stop_iteration(vm));
         }
 
-        match self.entries.borrow_mut().next() {
+        match self.entries.write().unwrap().next() {
             Some(entry) => match entry {
                 Ok(entry) => Ok(DirEntry {
                     entry,
@@ -713,7 +714,7 @@ impl ScandirIterator {
                 Err(s) => Err(convert_io_error(vm, s)),
             },
             None => {
-                self.exhausted.set(true);
+                self.exhausted.store(true);
                 Err(objiter::new_stop_iteration(vm))
             }
         }
@@ -721,7 +722,7 @@ impl ScandirIterator {
 
     #[pymethod]
     fn close(&self) {
-        self.exhausted.set(true);
+        self.exhausted.store(true);
     }
 
     #[pymethod(name = "__iter__")]
@@ -748,8 +749,8 @@ fn os_scandir(path: OptionalArg<PyPathLike>, vm: &VirtualMachine) -> PyResult {
 
     match fs::read_dir(path.path) {
         Ok(iter) => Ok(ScandirIterator {
-            entries: RefCell::new(iter),
-            exhausted: Cell::new(false),
+            entries: RwLock::new(iter),
+            exhausted: AtomicCell::new(false),
             mode: path.mode,
         }
         .into_ref(vm)
@@ -812,6 +813,8 @@ fn os_stat(
     use std::os::linux::fs::MetadataExt;
     #[cfg(target_os = "macos")]
     use std::os::macos::fs::MetadataExt;
+    #[cfg(target_os = "openbsd")]
+    use std::os::openbsd::fs::MetadataExt;
     #[cfg(target_os = "redox")]
     use std::os::redox::fs::MetadataExt;
 
@@ -918,7 +921,8 @@ fn os_stat(
     target_os = "macos",
     target_os = "android",
     target_os = "redox",
-    windows
+    windows,
+    unix
 )))]
 fn os_stat(
     file: Either<PyPathLike, i64>,
@@ -1307,13 +1311,13 @@ fn os_urandom(size: usize, vm: &VirtualMachine) -> PyResult<Vec<u8>> {
     }
 }
 
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "openbsd"))]
 type ModeT = u32;
 
 #[cfg(target_os = "macos")]
 type ModeT = u16;
 
-#[cfg(any(target_os = "macos", target_os = "linux"))]
+#[cfg(any(target_os = "macos", target_os = "linux", target_os = "openbsd"))]
 fn os_umask(mask: ModeT, _vm: &VirtualMachine) -> PyResult<ModeT> {
     let ret_mask = unsafe { libc::umask(mask) };
     Ok(ret_mask)
@@ -1455,6 +1459,73 @@ fn os_sync(_vm: &VirtualMachine) -> PyResult<()> {
         libc::sync();
     }
     Ok(())
+}
+
+// cfg from nix
+#[cfg(any(
+    target_os = "android",
+    target_os = "freebsd",
+    target_os = "linux",
+    target_os = "openbsd"
+))]
+fn os_getresuid(vm: &VirtualMachine) -> PyResult<(u32, u32, u32)> {
+    let mut ruid = 0;
+    let mut euid = 0;
+    let mut suid = 0;
+    let ret = unsafe { libc::getresuid(&mut ruid, &mut euid, &mut suid) };
+    if ret == 0 {
+        Ok((ruid, euid, suid))
+    } else {
+        Err(errno_err(vm))
+    }
+}
+
+// cfg from nix
+#[cfg(any(
+    target_os = "android",
+    target_os = "freebsd",
+    target_os = "linux",
+    target_os = "openbsd"
+))]
+fn os_getresgid(vm: &VirtualMachine) -> PyResult<(u32, u32, u32)> {
+    let mut rgid = 0;
+    let mut egid = 0;
+    let mut sgid = 0;
+    let ret = unsafe { libc::getresgid(&mut rgid, &mut egid, &mut sgid) };
+    if ret == 0 {
+        Ok((rgid, egid, sgid))
+    } else {
+        Err(errno_err(vm))
+    }
+}
+
+// cfg from nix
+#[cfg(any(
+    target_os = "android",
+    target_os = "freebsd",
+    target_os = "linux",
+    target_os = "openbsd"
+))]
+fn os_setregid(rgid: u32, egid: u32, vm: &VirtualMachine) -> PyResult<i32> {
+    let ret = unsafe { libc::setregid(rgid, egid) };
+    if ret == 0 {
+        Ok(0)
+    } else {
+        Err(errno_err(vm))
+    }
+}
+
+// cfg from nix
+#[cfg(any(
+    target_os = "android",
+    target_os = "freebsd",
+    target_os = "linux",
+    target_os = "openbsd"
+))]
+fn os_initgroups(user_name: PyStringRef, gid: u32, vm: &VirtualMachine) -> PyResult<()> {
+    let user = ffi::CString::new(user_name.as_str()).unwrap();
+    let gid = Gid::from_raw(gid);
+    unistd::initgroups(&user, gid).map_err(|err| convert_nix_error(vm, err))
 }
 
 pub fn make_module(vm: &VirtualMachine) -> PyObjectRef {
@@ -1688,6 +1759,10 @@ fn extend_module_platform_specific(vm: &VirtualMachine, module: &PyObjectRef) {
     ))]
     extend_module!(vm, module, {
         "setresuid" => ctx.new_function(os_setresuid),
+        "getresuid" => ctx.new_function(os_getresuid),
+        "getresgid" => ctx.new_function(os_getresgid),
+        "setregid" => ctx.new_function(os_setregid),
+        "initgroups" => ctx.new_function(os_initgroups),
     });
 
     // cfg taken from nix

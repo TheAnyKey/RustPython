@@ -31,7 +31,7 @@ use crate::function::{OptionalArg, OptionalOption, PyFuncArgs};
 use crate::pyhash;
 use crate::pyobject::{
     Either, IdProtocol, IntoPyObject, ItemProtocol, PyClassImpl, PyContext, PyIterable,
-    PyObjectRef, PyRef, PyResult, PyValue, ThreadSafe, TryFromObject, TryIntoRef, TypeProtocol,
+    PyObjectRef, PyRef, PyResult, PyValue, TryFromObject, TryIntoRef, TypeProtocol,
 };
 use crate::vm::VirtualMachine;
 
@@ -52,7 +52,6 @@ pub struct PyString {
     hash: AtomicCell<Option<pyhash::PyHash>>,
     len: AtomicCell<Option<usize>>,
 }
-impl ThreadSafe for PyString {}
 
 impl PyString {
     #[inline]
@@ -103,7 +102,6 @@ pub struct PyStringIterator {
     pub string: PyStringRef,
     position: AtomicCell<usize>,
 }
-impl ThreadSafe for PyStringIterator {}
 
 impl PyValue for PyStringIterator {
     fn class(vm: &VirtualMachine) -> PyClassRef {
@@ -137,7 +135,6 @@ pub struct PyStringReverseIterator {
     pub position: AtomicCell<isize>,
     pub string: PyStringRef,
 }
-impl ThreadSafe for PyStringReverseIterator {}
 
 impl PyValue for PyStringReverseIterator {
     fn class(vm: &VirtualMachine) -> PyClassRef {
@@ -530,6 +527,36 @@ impl PyString {
             |s, x: &PyStringRef| s.starts_with(x.as_str()),
             vm,
         )
+    }
+
+    /// removeprefix($self, prefix, /)
+    ///
+    ///
+    /// Return a str with the given prefix string removed if present.
+    ///
+    /// If the string starts with the prefix string, return string[len(prefix):]
+    /// Otherwise, return a copy of the original string.
+    #[pymethod]
+    fn removeprefix(&self, pref: PyStringRef) -> String {
+        self.value
+            .as_str()
+            .py_removeprefix(&pref.value, pref.value.len(), |s, p| s.starts_with(p))
+            .to_string()
+    }
+
+    /// removesuffix(self, prefix, /)
+    ///
+    ///
+    /// Return a str with the given suffix string removed if present.
+    ///
+    /// If the string ends with the suffix string, return string[:len(suffix)]
+    /// Otherwise, return a copy of the original string.
+    #[pymethod]
+    fn removesuffix(&self, suff: PyStringRef) -> String {
+        self.value
+            .as_str()
+            .py_removesuffix(&suff.value, suff.value.len(), |s, p| s.ends_with(p))
+            .to_string()
     }
 
     #[pymethod]

@@ -1,5 +1,5 @@
-use std::cell::RefCell;
 use std::fmt::{self, Debug, Formatter};
+use std::sync::RwLock;
 
 use csv as rust_csv;
 use itertools::join;
@@ -126,7 +126,7 @@ impl ReadState {
 
 #[pyclass(name = "Reader")]
 struct Reader {
-    state: RefCell<ReadState>,
+    state: RwLock<ReadState>,
 }
 
 impl Debug for Reader {
@@ -143,7 +143,7 @@ impl PyValue for Reader {
 
 impl Reader {
     fn new(iter: PyIterable<PyObjectRef>, config: ReaderOption) -> Self {
-        let state = RefCell::new(ReadState::new(iter, config));
+        let state = RwLock::new(ReadState::new(iter, config));
         Reader { state }
     }
 }
@@ -152,13 +152,13 @@ impl Reader {
 impl Reader {
     #[pymethod(name = "__iter__")]
     fn iter(this: PyRef<Self>, vm: &VirtualMachine) -> PyResult {
-        this.state.borrow_mut().cast_to_reader(vm)?;
+        this.state.write().unwrap().cast_to_reader(vm)?;
         this.into_pyobject(vm)
     }
 
     #[pymethod(name = "__next__")]
     fn next(&self, vm: &VirtualMachine) -> PyResult {
-        let mut state = self.state.borrow_mut();
+        let mut state = self.state.write().unwrap();
         state.cast_to_reader(vm)?;
 
         if let ReadState::CsvIter(ref mut reader) = &mut *state {

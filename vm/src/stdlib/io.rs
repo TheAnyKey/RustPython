@@ -1,10 +1,11 @@
 /*
  * I/O core tools.
  */
-use std::cell::{RefCell, RefMut};
 use std::fs;
 use std::io::{self, prelude::*, Cursor, SeekFrom};
+use std::sync::{RwLock, RwLockWriteGuard};
 
+use crossbeam_utils::atomic::AtomicCell;
 use num_traits::ToPrimitive;
 
 use crate::exceptions::PyBaseExceptionRef;
@@ -120,7 +121,8 @@ impl BufferedIO {
 
 #[derive(Debug)]
 struct PyStringIO {
-    buffer: RefCell<Option<BufferedIO>>,
+    buffer: RwLock<BufferedIO>,
+    closed: AtomicCell<bool>,
 }
 
 type PyStringIORef = PyRef<PyStringIO>;
@@ -132,10 +134,9 @@ impl PyValue for PyStringIO {
 }
 
 impl PyStringIORef {
-    fn buffer(&self, vm: &VirtualMachine) -> PyResult<RefMut<BufferedIO>> {
-        let buffer = self.buffer.borrow_mut();
-        if buffer.is_some() {
-            Ok(RefMut::map(buffer, |opt| opt.as_mut().unwrap()))
+    fn buffer(&self, vm: &VirtualMachine) -> PyResult<RwLockWriteGuard<'_, BufferedIO>> {
+        if !self.closed.load() {
+            Ok(self.buffer.write().unwrap())
         } else {
             Err(vm.new_value_error("I/O operation on closed file.".to_owned()))
         }
@@ -209,11 +210,11 @@ impl PyStringIORef {
     }
 
     fn closed(self) -> bool {
-        self.buffer.borrow().is_none()
+        self.closed.load()
     }
 
     fn close(self) {
-        self.buffer.replace(None);
+        self.closed.store(true);
     }
 }
 
@@ -235,14 +236,16 @@ fn string_io_new(
     let input = flatten.map_or_else(Vec::new, |v| objstr::borrow_value(&v).as_bytes().to_vec());
 
     PyStringIO {
-        buffer: RefCell::new(Some(BufferedIO::new(Cursor::new(input)))),
+        buffer: RwLock::new(BufferedIO::new(Cursor::new(input))),
+        closed: AtomicCell::new(false),
     }
     .into_ref_with_type(vm, cls)
 }
 
 #[derive(Debug)]
 struct PyBytesIO {
-    buffer: RefCell<Option<BufferedIO>>,
+    buffer: RwLock<BufferedIO>,
+    closed: AtomicCell<bool>,
 }
 
 type PyBytesIORef = PyRef<PyBytesIO>;
@@ -254,10 +257,9 @@ impl PyValue for PyBytesIO {
 }
 
 impl PyBytesIORef {
-    fn buffer(&self, vm: &VirtualMachine) -> PyResult<RefMut<BufferedIO>> {
-        let buffer = self.buffer.borrow_mut();
-        if buffer.is_some() {
-            Ok(RefMut::map(buffer, |opt| opt.as_mut().unwrap()))
+    fn buffer(&self, vm: &VirtualMachine) -> PyResult<RwLockWriteGuard<'_, BufferedIO>> {
+        if !self.closed.load() {
+            Ok(self.buffer.write().unwrap())
         } else {
             Err(vm.new_value_error("I/O operation on closed file.".to_owned()))
         }
@@ -320,11 +322,11 @@ impl PyBytesIORef {
     }
 
     fn closed(self) -> bool {
-        self.buffer.borrow().is_none()
+        self.closed.load()
     }
 
     fn close(self) {
-        self.buffer.replace(None);
+        self.closed.store(true)
     }
 }
 
@@ -339,7 +341,8 @@ fn bytes_io_new(
     };
 
     PyBytesIO {
-        buffer: RefCell::new(Some(BufferedIO::new(Cursor::new(raw_bytes)))),
+        buffer: RwLock::new(BufferedIO::new(Cursor::new(raw_bytes))),
+        closed: AtomicCell::new(false),
     }
     .into_ref_with_type(vm, cls)
 }
@@ -519,6 +522,16 @@ fn buffered_io_base_fileno(instance: PyObjectRef, vm: &VirtualMachine) -> PyResu
     vm.call_method(&raw, "fileno", vec![])
 }
 
+fn buffered_io_base_mode(instance: PyObjectRef, vm: &VirtualMachine) -> PyResult {
+    let raw = vm.get_attribute(instance, "raw")?;
+    vm.get_attribute(raw, "mode")
+}
+
+fn buffered_io_base_name(instance: PyObjectRef, vm: &VirtualMachine) -> PyResult {
+    let raw = vm.get_attribute(instance, "raw")?;
+    vm.get_attribute(raw, "name")
+}
+
 fn buffered_reader_read(
     instance: PyObjectRef,
     size: OptionalOption<i64>,
@@ -589,6 +602,10 @@ mod fileio {
         opener: Option<PyObjectRef>,
     }
     fn file_io_init(file_io: PyObjectRef, args: FileIOArgs, vm: &VirtualMachine) -> PyResult {
+        let mode = args
+            .mode
+            .map(|mode| mode.as_str().to_owned())
+            .unwrap_or_else(|| "r".to_owned());
         let (name, file_no) = match args.name {
             Either::A(name) => {
                 if !args.closefd {
@@ -596,10 +613,7 @@ mod fileio {
                         vm.new_value_error("Cannot use closefd=False with file name".to_owned())
                     );
                 }
-                let mode = match args.mode {
-                    Some(mode) => compute_c_flag(mode.as_str()),
-                    None => libc::O_RDONLY as _,
-                };
+                let mode = compute_c_flag(&mode);
                 let fd = if let Some(opener) = args.opener {
                     let fd =
                         vm.invoke(&opener, vec![name.clone().into_object(), vm.new_int(mode)])?;
@@ -626,6 +640,7 @@ mod fileio {
         };
 
         vm.set_attr(&file_io, "name", name)?;
+        vm.set_attr(&file_io, "mode", vm.new_str(mode))?;
         vm.set_attr(&file_io, "__fileno", vm.new_int(file_no))?;
         vm.set_attr(&file_io, "closefd", vm.new_bool(args.closefd))?;
         vm.set_attr(&file_io, "__closed", vm.new_bool(false))?;
@@ -824,6 +839,16 @@ fn text_io_wrapper_seek(
 fn text_io_wrapper_tell(instance: PyObjectRef, vm: &VirtualMachine) -> PyResult {
     let raw = vm.get_attribute(instance, "buffer")?;
     vm.invoke(&vm.get_attribute(raw, "tell")?, vec![])
+}
+
+fn text_io_wrapper_mode(instance: PyObjectRef, vm: &VirtualMachine) -> PyResult {
+    let raw = vm.get_attribute(instance, "buffer")?;
+    vm.get_attribute(raw, "mode")
+}
+
+fn text_io_wrapper_name(instance: PyObjectRef, vm: &VirtualMachine) -> PyResult {
+    let raw = vm.get_attribute(instance, "buffer")?;
+    vm.get_attribute(raw, "name")
 }
 
 fn text_io_wrapper_read(
@@ -1055,6 +1080,8 @@ pub fn io_open(
         )),
     )?;
 
+    vm.set_attr(&file_io_obj, "mode", vm.new_str(mode_string.to_owned()))?;
+
     // Create Buffered class to consume FileIO. The type of buffered class depends on
     // the operation in the mode.
     // There are 3 possible classes here, each inheriting from the RawBaseIO
@@ -1137,6 +1164,8 @@ pub fn make_module(vm: &VirtualMachine) -> PyObjectRef {
         "tell" => ctx.new_method(buffered_reader_tell),
         "close" => ctx.new_method(buffered_reader_close),
         "fileno" => ctx.new_method(buffered_io_base_fileno),
+        "name" => ctx.new_readonly_getset("name", buffered_io_base_name),
+        "mode" => ctx.new_readonly_getset("mode", buffered_io_base_mode),
     });
 
     let buffered_writer = py_class!(ctx, "BufferedWriter", buffered_io_base.clone(), {
@@ -1146,7 +1175,8 @@ pub fn make_module(vm: &VirtualMachine) -> PyObjectRef {
         "__init__" => ctx.new_method(buffered_io_base_init),
         "write" => ctx.new_method(buffered_writer_write),
         "seekable" => ctx.new_method(buffered_writer_seekable),
-        "fileno" => ctx.new_method(buffered_io_base_fileno),
+        "name" => ctx.new_readonly_getset("name", buffered_io_base_name),
+        "mode" => ctx.new_readonly_getset("mode", buffered_io_base_mode),
     });
 
     //TextIOBase Subclass
@@ -1158,6 +1188,8 @@ pub fn make_module(vm: &VirtualMachine) -> PyObjectRef {
         "read" => ctx.new_method(text_io_wrapper_read),
         "write" => ctx.new_method(text_io_wrapper_write),
         "readline" => ctx.new_method(text_io_wrapper_readline),
+        "name" => ctx.new_readonly_getset("name", text_io_wrapper_name),
+        "mode" => ctx.new_readonly_getset("mode", text_io_wrapper_mode),
     });
 
     //StringIO: in-memory text

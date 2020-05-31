@@ -11,18 +11,19 @@ mod _random {
     use crate::VirtualMachine;
     use num_bigint::{BigInt, Sign};
     use num_traits::Signed;
-    use rand::RngCore;
-    use std::cell::RefCell;
+    use rand::{rngs::StdRng, RngCore, SeedableRng};
+
+    use std::sync::Mutex;
 
     #[derive(Debug)]
     enum PyRng {
-        Std(rand::rngs::ThreadRng),
+        Std(Box<StdRng>),
         MT(Box<mt19937::MT19937>),
     }
 
     impl Default for PyRng {
         fn default() -> Self {
-            PyRng::Std(rand::thread_rng())
+            PyRng::Std(Box::new(StdRng::from_entropy()))
         }
     }
 
@@ -56,7 +57,7 @@ mod _random {
     #[pyclass(name = "Random")]
     #[derive(Debug)]
     struct PyRandom {
-        rng: RefCell<PyRng>,
+        rng: Mutex<PyRng>,
     }
 
     impl PyValue for PyRandom {
@@ -70,14 +71,15 @@ mod _random {
         #[pyslot(new)]
         fn new(cls: PyClassRef, vm: &VirtualMachine) -> PyResult<PyRef<Self>> {
             PyRandom {
-                rng: RefCell::new(PyRng::default()),
+                rng: Mutex::default(),
             }
             .into_ref_with_type(vm, cls)
         }
 
         #[pymethod]
         fn random(&self) -> f64 {
-            mt19937::gen_res53(&mut *self.rng.borrow_mut())
+            let mut rng = self.rng.lock().unwrap();
+            mt19937::gen_res53(&mut *rng)
         }
 
         #[pymethod]
@@ -93,13 +95,13 @@ mod _random {
                 }
             };
 
-            *self.rng.borrow_mut() = new_rng;
+            *self.rng.lock().unwrap() = new_rng;
         }
 
         #[pymethod]
-        fn getrandbits(&self, mut k: usize) -> BigInt {
-            let mut rng = self.rng.borrow_mut();
-
+        fn getrandbits(&self, k: usize) -> BigInt {
+            let mut rng = self.rng.lock().unwrap();
+            let mut k = k;
             let mut gen_u32 = |k| rng.next_u32() >> (32 - k) as u32;
 
             if k <= 32 {

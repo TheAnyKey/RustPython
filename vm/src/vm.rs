@@ -11,6 +11,7 @@ use std::sync::{Arc, Mutex, MutexGuard};
 use std::{env, fmt};
 
 use arr_macro::arr;
+use crossbeam_utils::atomic::AtomicCell;
 use num_bigint::BigInt;
 use num_traits::ToPrimitive;
 use once_cell::sync::Lazy;
@@ -56,21 +57,26 @@ use crate::sysmodule;
 pub struct VirtualMachine {
     pub builtins: PyObjectRef,
     pub sys_module: PyObjectRef,
-    pub stdlib_inits: RefCell<HashMap<String, stdlib::StdlibInitFunc>>,
-    pub ctx: PyContext,
+    pub ctx: Arc<PyContext>,
     pub frames: RefCell<Vec<FrameRef>>,
     pub wasm_id: Option<String>,
     pub exceptions: RefCell<Vec<PyBaseExceptionRef>>,
-    pub frozen: RefCell<HashMap<String, bytecode::FrozenModule>>,
-    pub import_func: RefCell<PyObjectRef>,
+    pub import_func: PyObjectRef,
     pub profile_func: RefCell<PyObjectRef>,
     pub trace_func: RefCell<PyObjectRef>,
-    pub use_tracing: RefCell<bool>,
-    pub signal_handlers: RefCell<[PyObjectRef; NSIG]>,
-    pub settings: PySettings,
+    pub use_tracing: Cell<bool>,
     pub recursion_limit: Cell<usize>,
-    pub codec_registry: RefCell<Vec<PyObjectRef>>,
+    pub signal_handlers: Option<Box<RefCell<[PyObjectRef; NSIG]>>>,
+    pub state: Arc<PyGlobalState>,
     pub initialized: bool,
+}
+
+pub struct PyGlobalState {
+    pub settings: PySettings,
+    pub stdlib_inits: HashMap<String, stdlib::StdlibInitFunc>,
+    pub frozen: HashMap<String, bytecode::FrozenModule>,
+    pub stacksize: AtomicCell<usize>,
+    pub thread_count: AtomicCell<usize>,
 }
 
 pub const NSIG: usize = 64;
@@ -175,31 +181,35 @@ impl VirtualMachine {
         let sysmod_dict = ctx.new_dict();
         let sysmod = new_module(sysmod_dict.clone());
 
-        let stdlib_inits = RefCell::new(stdlib::get_module_inits());
-        let frozen = RefCell::new(frozen::get_module_inits());
-        let import_func = RefCell::new(ctx.none());
+        let import_func = ctx.none();
         let profile_func = RefCell::new(ctx.none());
         let trace_func = RefCell::new(ctx.none());
         let signal_handlers = RefCell::new(arr![ctx.none(); 64]);
         let initialize_parameter = settings.initialization_parameter;
 
+        let stdlib_inits = stdlib::get_module_inits();
+        let frozen = frozen::get_module_inits();
+
         let mut vm = VirtualMachine {
             builtins: builtins.clone(),
             sys_module: sysmod.clone(),
-            stdlib_inits,
-            ctx,
+            ctx: Arc::new(ctx),
             frames: RefCell::new(vec![]),
             wasm_id: None,
             exceptions: RefCell::new(vec![]),
-            frozen,
             import_func,
             profile_func,
             trace_func,
-            use_tracing: RefCell::new(false),
-            signal_handlers,
-            settings,
+            use_tracing: Cell::new(false),
             recursion_limit: Cell::new(if cfg!(debug_assertions) { 256 } else { 512 }),
-            codec_registry: RefCell::default(),
+            signal_handlers: Some(Box::new(signal_handlers)),
+            state: Arc::new(PyGlobalState {
+                settings,
+                stdlib_inits,
+                frozen,
+                stacksize: AtomicCell::new(0),
+                thread_count: AtomicCell::new(0),
+            }),
             initialized: false,
         };
 
@@ -232,7 +242,7 @@ impl VirtualMachine {
                 builtins::make_module(self, self.builtins.clone());
                 sysmodule::make_module(self, self.sys_module.clone(), self.builtins.clone());
 
-                let inner_init = || -> PyResult<()> {
+                let mut inner_init = || -> PyResult<()> {
                     #[cfg(not(target_arch = "wasm32"))]
                     import::import_builtin(self, "signal")?;
 
@@ -240,7 +250,10 @@ impl VirtualMachine {
 
                     #[cfg(any(not(target_arch = "wasm32"), target_os = "wasi"))]
                     {
-                        let io = self.import("io", &[], 0)?;
+                        // this isn't fully compatible with CPython; it imports "io" and sets
+                        // builtins.open to io.OpenWrapper, but this is easier, since it doesn't
+                        // require the Python stdlib to be present
+                        let io = self.import("_io", &[], 0)?;
                         let io_open = self.get_attribute(io.clone(), "open")?;
                         let set_stdio = |name, fd, mode: &str| {
                             let stdio = self.invoke(
@@ -259,17 +272,37 @@ impl VirtualMachine {
                         set_stdio("stdout", 1, "w")?;
                         set_stdio("stderr", 2, "w")?;
 
-                        let open_wrapper = self.get_attribute(io, "OpenWrapper")?;
-                        self.set_attr(&self.builtins, "open", open_wrapper)?;
+                        self.set_attr(&self.builtins, "open", io_open)?;
                     }
 
                     Ok(())
                 };
 
-                self.expect_pyresult(inner_init(), "initializiation failed");
+                let res = inner_init();
+
+                self.expect_pyresult(res, "initializiation failed");
 
                 self.initialized = true;
             }
+        }
+    }
+
+    pub(crate) fn new_thread(&self) -> VirtualMachine {
+        VirtualMachine {
+            builtins: self.builtins.clone(),
+            sys_module: self.sys_module.clone(),
+            ctx: self.ctx.clone(),
+            frames: RefCell::new(vec![]),
+            wasm_id: self.wasm_id.clone(),
+            exceptions: RefCell::new(vec![]),
+            import_func: self.import_func.clone(),
+            profile_func: RefCell::new(self.get_none()),
+            trace_func: RefCell::new(self.get_none()),
+            use_tracing: Cell::new(false),
+            recursion_limit: self.recursion_limit.clone(),
+            signal_handlers: None,
+            state: self.state.clone(),
+            initialized: self.initialized,
         }
     }
 
@@ -814,7 +847,7 @@ impl VirtualMachine {
 
     /// Call registered trace function.
     fn trace_event(&self, event: TraceEvent) -> PyResult<()> {
-        if *self.use_tracing.borrow() {
+        if self.use_tracing.get() {
             let frame = self.get_none();
             let event = self.new_str(event.to_string());
             let arg = self.get_none();
@@ -824,17 +857,17 @@ impl VirtualMachine {
             // tracing function itself.
             let trace_func = self.trace_func.borrow().clone();
             if !self.is_none(&trace_func) {
-                self.use_tracing.replace(false);
+                self.use_tracing.set(false);
                 let res = self.invoke(&trace_func, args.clone());
-                self.use_tracing.replace(true);
+                self.use_tracing.set(true);
                 res?;
             }
 
             let profile_func = self.profile_func.borrow().clone();
             if !self.is_none(&profile_func) {
-                self.use_tracing.replace(false);
+                self.use_tracing.set(false);
                 let res = self.invoke(&profile_func, args);
-                self.use_tracing.replace(true);
+                self.use_tracing.set(true);
                 res?;
             }
         }
@@ -1033,7 +1066,7 @@ impl VirtualMachine {
     #[cfg(feature = "rustpython-compiler")]
     pub fn compile_opts(&self) -> CompileOpts {
         CompileOpts {
-            optimize: self.settings.optimize,
+            optimize: self.state.settings.optimize,
         }
     }
 

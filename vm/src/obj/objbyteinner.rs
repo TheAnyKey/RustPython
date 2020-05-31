@@ -17,8 +17,7 @@ use super::pystr::{self, PyCommonString, PyCommonStringWrapper};
 use crate::function::{OptionalArg, OptionalOption};
 use crate::pyhash;
 use crate::pyobject::{
-    Either, PyComparisonValue, PyIterable, PyObjectRef, PyResult, ThreadSafe, TryFromObject,
-    TypeProtocol,
+    Either, PyComparisonValue, PyIterable, PyObjectRef, PyResult, TryFromObject, TypeProtocol,
 };
 use crate::vm::VirtualMachine;
 
@@ -32,8 +31,6 @@ impl From<Vec<u8>> for PyByteInner {
         Self { elements }
     }
 }
-
-impl ThreadSafe for PyByteInner {}
 
 impl TryFromObject for PyByteInner {
     fn try_from_object(vm: &VirtualMachine, obj: PyObjectRef) -> PyResult<Self> {
@@ -840,6 +837,24 @@ impl PyByteInner {
                 |s, chars| s.trim_end_with(|c| chars.contains(&(c as u8))),
                 |s| s.trim_end(),
             )
+            .to_vec()
+    }
+
+    // new in Python 3.9
+    pub fn removeprefix(&self, prefix: PyByteInner) -> Vec<u8> {
+        self.elements
+            .py_removeprefix(&prefix.elements, prefix.elements.len(), |s, p| {
+                s.starts_with(p)
+            })
+            .to_vec()
+    }
+
+    // new in Python 3.9
+    pub fn removesuffix(&self, suffix: PyByteInner) -> Vec<u8> {
+        self.elements
+            .py_removesuffix(&suffix.elements, suffix.elements.len(), |s, p| {
+                s.ends_with(p)
+            })
             .to_vec()
     }
 
